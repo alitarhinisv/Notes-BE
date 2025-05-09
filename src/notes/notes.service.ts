@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Note } from '../entities/note.entity';
@@ -7,6 +7,8 @@ import { User } from '../entities/user.entity';
 
 @Injectable()
 export class NotesService {
+  private readonly logger = new Logger(NotesService.name);
+
   constructor(
     @InjectRepository(Note)
     private notesRepository: Repository<Note>,
@@ -15,9 +17,11 @@ export class NotesService {
   ) {}
 
   async create(userId: number, createNoteDto: CreateNoteDto): Promise<Note> {
+    this.logger.log(`Creating note for user ${userId}`);
     const owner = await this.usersRepository.findOne({ where: { id: userId } });
     
     if (!owner) {
+      this.logger.error(`User with ID ${userId} not found`);
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
     
@@ -26,7 +30,9 @@ export class NotesService {
       owner,
     });
     
-    return this.notesRepository.save(note);
+    const savedNote = await this.notesRepository.save(note);
+    this.logger.log(`Note created successfully with ID ${savedNote.id}`);
+    return savedNote;
   }
 
   async findAll() {
@@ -36,6 +42,7 @@ export class NotesService {
   }
 
   async findAllByUser(userId: number, isAdmin: boolean = false) {
+    this.logger.log(`Fetching notes for user ${userId}, isAdmin: ${isAdmin}`);
     if (isAdmin) {
       const notes = await this.notesRepository.find({
         relations: ['owner', 'sharedWith'],
@@ -81,6 +88,7 @@ export class NotesService {
   }
 
   async findSharedWithUser(userId: number, isAdmin: boolean = false) {
+    this.logger.log(`Fetching shared notes for user ${userId}, isAdmin: ${isAdmin}`);
     if (isAdmin) {
       const notes = await this.notesRepository.find({
         relations: ['owner', 'sharedWith'],
@@ -128,6 +136,7 @@ export class NotesService {
   }
 
   async findOne(id: number, userId: number, isAdmin: boolean = false) {
+    this.logger.log(`Fetching note ${id} for user ${userId}, isAdmin: ${isAdmin}`);
     const note = await this.notesRepository.findOne({
       where: { id },
       relations: ['owner', 'sharedWith'],
@@ -145,6 +154,7 @@ export class NotesService {
   }
 
   async update(id: number, userId: number, updateNoteDto: CreateNoteDto, isAdmin: boolean = false) {
+    this.logger.log(`Updating note ${id} by user ${userId}, isAdmin: ${isAdmin}`);
     const note = await this.findOne(id, userId, isAdmin);
     
     if (!isAdmin && note.owner.id !== userId) {
@@ -156,6 +166,7 @@ export class NotesService {
   }
 
   async remove(id: number, userId: number, isAdmin: boolean = false) {
+    this.logger.log(`Removing note ${id} by user ${userId}, isAdmin: ${isAdmin}`);
     const note = await this.findOne(id, userId, isAdmin);
     
     if (!isAdmin && note.owner.id !== userId) {
@@ -167,6 +178,7 @@ export class NotesService {
   }
 
   async share(noteId: number, ownerId: number, targetUserId: number) {
+    this.logger.log(`Sharing note ${noteId} from user ${ownerId} to user ${targetUserId}`);
     const note = await this.findOne(noteId, ownerId);
     
     if (note.owner.id !== ownerId) {
