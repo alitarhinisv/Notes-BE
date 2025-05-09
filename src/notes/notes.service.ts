@@ -37,22 +37,94 @@ export class NotesService {
 
   async findAllByUser(userId: number, isAdmin: boolean = false) {
     if (isAdmin) {
-      return this.notesRepository.find({
+      const notes = await this.notesRepository.find({
         relations: ['owner', 'sharedWith'],
       });
+      
+      return notes.map(note => ({
+        ...note,
+        owner: {
+          id: note.owner.id,
+          email: note.owner.email,
+          username: note.owner.username,
+          role: note.owner.role
+        },
+        sharedWith: note.sharedWith.map(user => ({
+          id: user.id,
+          email: user.email,
+          username: user.username,
+          role: user.role
+        }))
+      }));
     }
-    return this.notesRepository.find({
+    
+    const notes = await this.notesRepository.find({
       where: { owner: { id: userId } },
       relations: ['sharedWith', 'owner'],
     });
+    
+    return notes.map(note => ({
+      ...note,
+      owner: {
+        id: note.owner.id,
+        email: note.owner.email,
+        username: note.owner.username,
+        role: note.owner.role
+      },
+      sharedWith: note.sharedWith.map(user => ({
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        role: user.role
+      }))
+    }));
   }
 
-  async findSharedWithUser(userId: number) {
-    return this.notesRepository
+  async findSharedWithUser(userId: number, isAdmin: boolean = false) {
+    if (isAdmin) {
+      const notes = await this.notesRepository.find({
+        relations: ['owner', 'sharedWith'],
+      });
+      
+      return notes.map(note => ({
+        ...note,
+        owner: {
+          id: note.owner.id,
+          email: note.owner.email,
+          username: note.owner.username,
+          role: note.owner.role
+        },
+        sharedWith: note.sharedWith.map(user => ({
+          id: user.id,
+          email: user.email,
+          username: user.username,
+          role: user.role
+        }))
+      }));
+    }
+    
+    const notes = await this.notesRepository
       .createQueryBuilder('note')
       .innerJoinAndSelect('note.sharedWith', 'user')
+      .innerJoinAndSelect('note.owner', 'owner')
       .where('user.id = :userId', { userId })
       .getMany();
+  
+    return notes.map(note => ({
+      ...note,
+      owner: {
+        id: note.owner.id,
+        email: note.owner.email,
+        username: note.owner.username,
+        role: note.owner.role
+      },
+      sharedWith: note.sharedWith.map(user => ({
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        role: user.role
+      }))
+    }));
   }
 
   async findOne(id: number, userId: number, isAdmin: boolean = false) {

@@ -22,7 +22,8 @@ export class NotesController {
 
   @Get('shared')
   findShared(@Request() req) {
-    return this.notesService.findSharedWithUser(req.user.id);
+    const isAdmin = req.user.role === 'admin';
+    return this.notesService.findSharedWithUser(req.user.id, isAdmin);
   }
 
   @Get(':id')
