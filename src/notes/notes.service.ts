@@ -29,10 +29,21 @@ export class NotesService {
     return this.notesRepository.save(note);
   }
 
-  async findAllByUser(userId: number) {
+  async findAll() {
+    return this.notesRepository.find({
+      relations: ['owner', 'sharedWith'],
+    });
+  }
+
+  async findAllByUser(userId: number, isAdmin: boolean = false) {
+    if (isAdmin) {
+      return this.notesRepository.find({
+        relations: ['owner', 'sharedWith'],
+      });
+    }
     return this.notesRepository.find({
       where: { owner: { id: userId } },
-      relations: ['sharedWith'],
+      relations: ['sharedWith', 'owner'],
     });
   }
 
@@ -44,7 +55,7 @@ export class NotesService {
       .getMany();
   }
 
-  async findOne(id: number, userId: number) {
+  async findOne(id: number, userId: number, isAdmin: boolean = false) {
     const note = await this.notesRepository.findOne({
       where: { id },
       relations: ['owner', 'sharedWith'],
@@ -54,22 +65,33 @@ export class NotesService {
       throw new NotFoundException('Note not found');
     }
 
-    if (note.owner.id !== userId && !note.sharedWith.some(user => user.id === userId)) {
+    if (!isAdmin && note.owner.id !== userId && !note.sharedWith.some(user => user.id === userId)) {
       throw new ForbiddenException('Access denied');
     }
 
     return note;
   }
 
-  async update(id: number, userId: number, updateNoteDto: CreateNoteDto) {
-    const note = await this.findOne(id, userId);
+  async update(id: number, userId: number, updateNoteDto: CreateNoteDto, isAdmin: boolean = false) {
+    const note = await this.findOne(id, userId, isAdmin);
     
-    if (note.owner.id !== userId) {
+    if (!isAdmin && note.owner.id !== userId) {
       throw new ForbiddenException('Only the owner can update the note');
     }
 
     Object.assign(note, updateNoteDto);
     return this.notesRepository.save(note);
+  }
+
+  async remove(id: number, userId: number, isAdmin: boolean = false) {
+    const note = await this.findOne(id, userId, isAdmin);
+    
+    if (!isAdmin && note.owner.id !== userId) {
+      throw new ForbiddenException('Only the owner can delete the note');
+    }
+
+    await this.notesRepository.remove(note);
+    return { success: true };
   }
 
   async share(noteId: number, ownerId: number, targetUserId: number) {
@@ -86,16 +108,5 @@ export class NotesService {
 
     note.sharedWith = [...note.sharedWith, targetUser];
     return this.notesRepository.save(note);
-  }
-
-  async remove(id: number, userId: number) {
-    const note = await this.findOne(id, userId);
-    
-    if (note.owner.id !== userId) {
-      throw new ForbiddenException('Only the owner can delete the note');
-    }
-
-    await this.notesRepository.remove(note);
-    return { success: true };
   }
 }

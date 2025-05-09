@@ -16,7 +16,8 @@ export class NotesController {
 
   @Get()
   findAll(@Request() req) {
-    return this.notesService.findAllByUser(req.user.id);
+    const isAdmin = req.user.role === 'admin';
+    return this.notesService.findAllByUser(req.user.id, isAdmin);
   }
 
   @Get('shared')
@@ -26,21 +27,24 @@ export class NotesController {
 
   @Get(':id')
   findOne(@Request() req, @Param('id') id: string) {
-    return this.notesService.findOne(+id, req.user.id);
+    const isAdmin = req.user.role === 'admin';
+    return this.notesService.findOne(+id, req.user.id, isAdmin);
   }
 
   @Put(':id')
   update(@Request() req, @Param('id') id: string, @Body() updateNoteDto: CreateNoteDto) {
-    return this.notesService.update(+id, req.user.id, updateNoteDto);
+    const isAdmin = req.user.role === 'admin';
+    return this.notesService.update(+id, req.user.id, updateNoteDto, isAdmin);
+  }
+
+  @Delete(':id')
+  remove(@Request() req, @Param('id') id: string) {
+    const isAdmin = req.user.role === 'admin';
+    return this.notesService.remove(+id, req.user.id, isAdmin);
   }
 
   @Post(':id/share')
   share(@Request() req, @Param('id') id: string, @Body() shareNoteDto: ShareNoteDto) {
     return this.notesService.share(+id, req.user.id, shareNoteDto.userId);
-  }
-
-  @Delete(':id')
-  remove(@Request() req, @Param('id') id: string) {
-    return this.notesService.remove(+id, req.user.id);
   }
 }
