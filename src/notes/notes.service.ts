@@ -48,12 +48,14 @@ export class NotesService {
         username: note.owner.username,
         role: note.owner.role,
       },
-      sharedWith: note.sharedWith.map((user) => ({
-        id: user.id,
-        email: user.email,
-        username: user.username,
-        role: user.role,
-      })),
+      sharedWith: note.sharedWith
+        ? note.sharedWith.map((user) => ({
+            id: user.id,
+            email: user.email,
+            username: user.username,
+            role: user.role,
+          }))
+        : [],
     };
   }
 
