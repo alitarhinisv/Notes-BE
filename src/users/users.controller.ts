@@ -29,8 +29,12 @@ export class UsersController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Get()
-  findAll() {
-    return this.usersService.findAll();
+  async findAll() {
+    const users = await this.usersService.findAll();
+    return users.map(user => {
+      const {...result } = user;
+      return result;
+    });
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

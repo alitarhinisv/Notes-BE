@@ -31,13 +31,16 @@ export class UsersService {
 
   async findAll() {
     const users = await this.usersRepository.find();
-    return users.map(({ password, ...result }) => result);
+    return users.map(user => {
+      const { password, ...result } = user;
+      return result;
+    });
   }
 
   async findOne(id: number) {
     const user = await this.usersRepository.findOne({ where: { id } });
     if (!user) {
-      throw new NotFoundException('User not found');
+      throw new NotFoundException(`User with ID ${id} not found`);
     }
     const { password, ...result } = user;
     return result;
