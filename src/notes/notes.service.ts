@@ -1,6 +1,14 @@
-import { Injectable, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  Logger,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
+import { Inject } from '@nestjs/common';
 import { Note } from '../entities/note.entity';
 import { CreateNoteDto } from './dto/create-note.dto';
 import { User } from '../entities/user.entity';
@@ -14,23 +22,34 @@ export class NotesService {
     private notesRepository: Repository<Note>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {}
+
+  private getCacheKey(type: string, id: number): string {
+    return `note:${type}:${id}`;
+  }
+
+  private async clearUserCache(userId: number): Promise<void> {
+    await this.cacheManager.del(this.getCacheKey('user', userId));
+    await this.cacheManager.del(this.getCacheKey('shared', userId));
+  }
 
   async create(userId: number, createNoteDto: CreateNoteDto): Promise<Note> {
     this.logger.log(`Creating note for user ${userId}`);
     const owner = await this.usersRepository.findOne({ where: { id: userId } });
-    
+
     if (!owner) {
       this.logger.error(`User with ID ${userId} not found`);
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
-    
+
     const note = this.notesRepository.create({
       ...createNoteDto,
       owner,
     });
-    
+
     const savedNote = await this.notesRepository.save(note);
+    await this.clearUserCache(userId);
     this.logger.log(`Note created successfully with ID ${savedNote.id}`);
     return savedNote;
   }
@@ -43,100 +62,129 @@ export class NotesService {
 
   async findAllByUser(userId: number, isAdmin: boolean = false) {
     this.logger.log(`Fetching notes for user ${userId}, isAdmin: ${isAdmin}`);
-    if (isAdmin) {
-      const notes = await this.notesRepository.find({
-        relations: ['owner', 'sharedWith'],
-      });
-      
-      return notes.map(note => ({
-        ...note,
-        owner: {
-          id: note.owner.id,
-          email: note.owner.email,
-          username: note.owner.username,
-          role: note.owner.role
-        },
-        sharedWith: note.sharedWith.map(user => ({
-          id: user.id,
-          email: user.email,
-          username: user.username,
-          role: user.role
-        }))
-      }));
+
+    if (!isAdmin) {
+      const cached = await this.cacheManager.get(
+        this.getCacheKey('user', userId),
+      );
+      if (cached) {
+        this.logger.log(`Cache hit for user ${userId}'s notes`);
+        return cached;
+      }
     }
-    
-    const notes = await this.notesRepository.find({
-      where: { owner: { id: userId } },
-      relations: ['sharedWith', 'owner'],
-    });
-    
-    return notes.map(note => ({
+
+    const notes = isAdmin
+      ? await this.notesRepository.find({
+          relations: ['owner', 'sharedWith'],
+        })
+      : await this.notesRepository.find({
+          where: { owner: { id: userId } },
+          relations: ['sharedWith', 'owner'],
+        });
+
+    const formattedNotes = notes.map((note) => ({
       ...note,
       owner: {
         id: note.owner.id,
         email: note.owner.email,
         username: note.owner.username,
-        role: note.owner.role
+        role: note.owner.role,
       },
-      sharedWith: note.sharedWith.map(user => ({
+      sharedWith: note.sharedWith.map((user) => ({
         id: user.id,
         email: user.email,
         username: user.username,
-        role: user.role
-      }))
+        role: user.role,
+      })),
     }));
+
+    if (!isAdmin) {
+      await this.cacheManager.set(
+        this.getCacheKey('user', userId),
+        formattedNotes,
+        60 * 60 * 1000, // 1 hour
+      );
+    }
+
+    return formattedNotes;
   }
 
   async findSharedWithUser(userId: number, isAdmin: boolean = false) {
-    this.logger.log(`Fetching shared notes for user ${userId}, isAdmin: ${isAdmin}`);
-    if (isAdmin) {
-      const notes = await this.notesRepository.find({
-        relations: ['owner', 'sharedWith'],
-      });
-      
-      return notes.map(note => ({
-        ...note,
-        owner: {
-          id: note.owner.id,
-          email: note.owner.email,
-          username: note.owner.username,
-          role: note.owner.role
-        },
-        sharedWith: note.sharedWith.map(user => ({
-          id: user.id,
-          email: user.email,
-          username: user.username,
-          role: user.role
-        }))
-      }));
+    this.logger.log(
+      `Fetching shared notes for user ${userId}, isAdmin: ${isAdmin}`,
+    );
+
+    if (!isAdmin) {
+      const cached = await this.cacheManager.get(
+        this.getCacheKey('shared', userId),
+      );
+      if (cached) {
+        this.logger.log(`Cache hit for user ${userId}'s shared notes`);
+        return cached;
+      }
     }
-    
-    const notes = await this.notesRepository
-      .createQueryBuilder('note')
-      .innerJoinAndSelect('note.sharedWith', 'user')
-      .innerJoinAndSelect('note.owner', 'owner')
-      .where('user.id = :userId', { userId })
-      .getMany();
-  
-    return notes.map(note => ({
+
+    const notes = isAdmin
+      ? await this.notesRepository.find({
+          relations: ['owner', 'sharedWith'],
+        })
+      : await this.notesRepository
+          .createQueryBuilder('note')
+          .innerJoinAndSelect('note.sharedWith', 'user')
+          .innerJoinAndSelect('note.owner', 'owner')
+          .where('user.id = :userId', { userId })
+          .getMany();
+
+    const formattedNotes = notes.map((note) => ({
       ...note,
       owner: {
         id: note.owner.id,
         email: note.owner.email,
         username: note.owner.username,
-        role: note.owner.role
+        role: note.owner.role,
       },
-      sharedWith: note.sharedWith.map(user => ({
+      sharedWith: note.sharedWith.map((user) => ({
         id: user.id,
         email: user.email,
         username: user.username,
-        role: user.role
-      }))
+        role: user.role,
+      })),
     }));
+
+    if (!isAdmin) {
+      await this.cacheManager.set(
+        this.getCacheKey('shared', userId),
+        formattedNotes,
+        60 * 60 * 1000, // 1 hour
+      );
+    }
+
+    return formattedNotes;
   }
 
   async findOne(id: number, userId: number, isAdmin: boolean = false) {
-    this.logger.log(`Fetching note ${id} for user ${userId}, isAdmin: ${isAdmin}`);
+    this.logger.log(
+      `Fetching note ${id} for user ${userId}, isAdmin: ${isAdmin}`,
+    );
+
+    const cacheKey = this.getCacheKey('single', id);
+    const cached = await this.cacheManager.get(cacheKey);
+
+    if (cached) {
+      this.logger.log(`Cache hit for note ${id}`);
+      const note = cached as Note;
+
+      if (
+        !isAdmin &&
+        note.owner.id !== userId &&
+        !note.sharedWith.some((user) => user.id === userId)
+      ) {
+        throw new ForbiddenException('Access denied');
+      }
+
+      return note;
+    }
+
     const note = await this.notesRepository.findOne({
       where: { id },
       relations: ['owner', 'sharedWith'],
@@ -146,51 +194,91 @@ export class NotesService {
       throw new NotFoundException('Note not found');
     }
 
-    if (!isAdmin && note.owner.id !== userId && !note.sharedWith.some(user => user.id === userId)) {
+    if (
+      !isAdmin &&
+      note.owner.id !== userId &&
+      !note.sharedWith.some((user) => user.id === userId)
+    ) {
       throw new ForbiddenException('Access denied');
     }
 
+    await this.cacheManager.set(cacheKey, note, 60 * 60 * 1000); // 1 hour
     return note;
   }
 
-  async update(id: number, userId: number, updateNoteDto: CreateNoteDto, isAdmin: boolean = false) {
-    this.logger.log(`Updating note ${id} by user ${userId}, isAdmin: ${isAdmin}`);
+  async update(
+    id: number,
+    userId: number,
+    updateNoteDto: CreateNoteDto,
+    isAdmin: boolean = false,
+  ) {
+    this.logger.log(
+      `Updating note ${id} by user ${userId}, isAdmin: ${isAdmin}`,
+    );
     const note = await this.findOne(id, userId, isAdmin);
-    
+
     if (!isAdmin && note.owner.id !== userId) {
       throw new ForbiddenException('Only the owner can update the note');
     }
 
     Object.assign(note, updateNoteDto);
-    return this.notesRepository.save(note);
+    const updatedNote = await this.notesRepository.save(note);
+
+    // Clear related caches
+    await this.cacheManager.del(this.getCacheKey('single', id));
+    await this.clearUserCache(userId);
+    await Promise.all(
+      note.sharedWith.map((user) => this.clearUserCache(user.id)),
+    );
+
+    return updatedNote;
   }
 
   async remove(id: number, userId: number, isAdmin: boolean = false) {
-    this.logger.log(`Removing note ${id} by user ${userId}, isAdmin: ${isAdmin}`);
+    this.logger.log(
+      `Removing note ${id} by user ${userId}, isAdmin: ${isAdmin}`,
+    );
     const note = await this.findOne(id, userId, isAdmin);
-    
+
     if (!isAdmin && note.owner.id !== userId) {
       throw new ForbiddenException('Only the owner can delete the note');
     }
+
+    // Clear related caches before deletion
+    await this.cacheManager.del(this.getCacheKey('single', id));
+    await this.clearUserCache(userId);
+    await Promise.all(
+      note.sharedWith.map((user) => this.clearUserCache(user.id)),
+    );
 
     await this.notesRepository.remove(note);
     return { success: true };
   }
 
   async share(noteId: number, ownerId: number, targetUserId: number) {
-    this.logger.log(`Sharing note ${noteId} from user ${ownerId} to user ${targetUserId}`);
+    this.logger.log(
+      `Sharing note ${noteId} from user ${ownerId} to user ${targetUserId}`,
+    );
     const note = await this.findOne(noteId, ownerId);
-    
+
     if (note.owner.id !== ownerId) {
       throw new ForbiddenException('Only the owner can share the note');
     }
 
-    const targetUser = await this.usersRepository.findOne({ where: { id: targetUserId } });
+    const targetUser = await this.usersRepository.findOne({
+      where: { id: targetUserId },
+    });
     if (!targetUser) {
       throw new NotFoundException('Target user not found');
     }
 
     note.sharedWith = [...note.sharedWith, targetUser];
-    return this.notesRepository.save(note);
+    const updatedNote = await this.notesRepository.save(note);
+
+    // Clear related caches
+    await this.cacheManager.del(this.getCacheKey('single', noteId));
+    await this.clearUserCache(targetUserId);
+
+    return updatedNote;
   }
 }
