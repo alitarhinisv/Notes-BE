@@ -12,6 +12,7 @@ import { Inject } from '@nestjs/common';
 import { Note } from '../entities/note.entity';
 import { CreateNoteDto } from './dto/create-note.dto';
 import { User } from '../entities/user.entity';
+import { FormattedNote } from './interfaces/formatted-note.interface';
 
 @Injectable()
 export class NotesService {
@@ -34,7 +35,32 @@ export class NotesService {
     await this.cacheManager.del(this.getCacheKey('shared', userId));
   }
 
-  async create(userId: number, createNoteDto: CreateNoteDto): Promise<Note> {
+  private formatNote(note: Note): FormattedNote {
+    return {
+      id: note.id,
+      title: note.title,
+      content: note.content,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      owner: {
+        id: note.owner.id,
+        email: note.owner.email,
+        username: note.owner.username,
+        role: note.owner.role,
+      },
+      sharedWith: note.sharedWith.map((user) => ({
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        role: user.role,
+      })),
+    };
+  }
+
+  async create(
+    userId: number,
+    createNoteDto: CreateNoteDto,
+  ): Promise<FormattedNote> {
     this.logger.log(`Creating note for user ${userId}`);
     const owner = await this.usersRepository.findOne({ where: { id: userId } });
 
@@ -51,7 +77,7 @@ export class NotesService {
     const savedNote = await this.notesRepository.save(note);
     await this.clearUserCache(userId);
     this.logger.log(`Note created successfully with ID ${savedNote.id}`);
-    return savedNote;
+    return this.formatNote(savedNote);
   }
 
   async findAll() {
@@ -60,11 +86,14 @@ export class NotesService {
     });
   }
 
-  async findAllByUser(userId: number, isAdmin: boolean = false) {
+  async findAllByUser(
+    userId: number,
+    isAdmin: boolean = false,
+  ): Promise<FormattedNote[]> {
     this.logger.log(`Fetching notes for user ${userId}, isAdmin: ${isAdmin}`);
 
     if (!isAdmin) {
-      const cached = await this.cacheManager.get(
+      const cached = await this.cacheManager.get<FormattedNote[]>(
         this.getCacheKey('user', userId),
       );
       if (cached) {
@@ -82,21 +111,7 @@ export class NotesService {
           relations: ['sharedWith', 'owner'],
         });
 
-    const formattedNotes = notes.map((note) => ({
-      ...note,
-      owner: {
-        id: note.owner.id,
-        email: note.owner.email,
-        username: note.owner.username,
-        role: note.owner.role,
-      },
-      sharedWith: note.sharedWith.map((user) => ({
-        id: user.id,
-        email: user.email,
-        username: user.username,
-        role: user.role,
-      })),
-    }));
+    const formattedNotes = notes.map((note) => this.formatNote(note));
 
     if (!isAdmin) {
       await this.cacheManager.set(
@@ -109,13 +124,16 @@ export class NotesService {
     return formattedNotes;
   }
 
-  async findSharedWithUser(userId: number, isAdmin: boolean = false) {
+  async findSharedWithUser(
+    userId: number,
+    isAdmin: boolean = false,
+  ): Promise<FormattedNote[]> {
     this.logger.log(
       `Fetching shared notes for user ${userId}, isAdmin: ${isAdmin}`,
     );
 
     if (!isAdmin) {
-      const cached = await this.cacheManager.get(
+      const cached = await this.cacheManager.get<FormattedNote[]>(
         this.getCacheKey('shared', userId),
       );
       if (cached) {
@@ -135,21 +153,7 @@ export class NotesService {
           .where('user.id = :userId', { userId })
           .getMany();
 
-    const formattedNotes = notes.map((note) => ({
-      ...note,
-      owner: {
-        id: note.owner.id,
-        email: note.owner.email,
-        username: note.owner.username,
-        role: note.owner.role,
-      },
-      sharedWith: note.sharedWith.map((user) => ({
-        id: user.id,
-        email: user.email,
-        username: user.username,
-        role: user.role,
-      })),
-    }));
+    const formattedNotes = notes.map((note) => this.formatNote(note));
 
     if (!isAdmin) {
       await this.cacheManager.set(
@@ -162,17 +166,21 @@ export class NotesService {
     return formattedNotes;
   }
 
-  async findOne(id: number, userId: number, isAdmin: boolean = false) {
+  async findOne(
+    id: number,
+    userId: number,
+    isAdmin: boolean = false,
+  ): Promise<FormattedNote> {
     this.logger.log(
       `Fetching note ${id} for user ${userId}, isAdmin: ${isAdmin}`,
     );
 
     const cacheKey = this.getCacheKey('single', id);
-    const cached = await this.cacheManager.get(cacheKey);
+    const cached = await this.cacheManager.get<FormattedNote>(cacheKey);
 
     if (cached) {
       this.logger.log(`Cache hit for note ${id}`);
-      const note = cached as Note;
+      const note = cached;
 
       if (
         !isAdmin &&
@@ -202,8 +210,9 @@ export class NotesService {
       throw new ForbiddenException('Access denied');
     }
 
-    await this.cacheManager.set(cacheKey, note, 60 * 60 * 1000); // 1 hour
-    return note;
+    const formattedNote = this.formatNote(note);
+    await this.cacheManager.set(cacheKey, formattedNote, 60 * 60 * 1000); // 1 hour
+    return formattedNote;
   }
 
   async update(
@@ -211,7 +220,7 @@ export class NotesService {
     userId: number,
     updateNoteDto: CreateNoteDto,
     isAdmin: boolean = false,
-  ) {
+  ): Promise<FormattedNote> {
     this.logger.log(
       `Updating note ${id} by user ${userId}, isAdmin: ${isAdmin}`,
     );
@@ -221,8 +230,17 @@ export class NotesService {
       throw new ForbiddenException('Only the owner can update the note');
     }
 
-    Object.assign(note, updateNoteDto);
-    const updatedNote = await this.notesRepository.save(note);
+    const existingNote = await this.notesRepository.findOne({
+      where: { id },
+      relations: ['owner', 'sharedWith'],
+    });
+
+    if (!existingNote) {
+      throw new NotFoundException('Note not found');
+    }
+
+    Object.assign(existingNote, updateNoteDto);
+    const updatedNote = await this.notesRepository.save(existingNote);
 
     // Clear related caches
     await this.cacheManager.del(this.getCacheKey('single', id));
@@ -231,16 +249,18 @@ export class NotesService {
       note.sharedWith.map((user) => this.clearUserCache(user.id)),
     );
 
-    return updatedNote;
+    return this.formatNote(updatedNote);
   }
 
   async remove(id: number, userId: number, isAdmin: boolean = false) {
     this.logger.log(
       `Removing note ${id} by user ${userId}, isAdmin: ${isAdmin}`,
     );
-    const note = await this.findOne(id, userId, isAdmin);
 
-    if (!isAdmin && note.owner.id !== userId) {
+    // Find the note with access check
+    const formattedNote = await this.findOne(id, userId, isAdmin);
+
+    if (!isAdmin && formattedNote.owner.id !== userId) {
       throw new ForbiddenException('Only the owner can delete the note');
     }
 
@@ -248,14 +268,29 @@ export class NotesService {
     await this.cacheManager.del(this.getCacheKey('single', id));
     await this.clearUserCache(userId);
     await Promise.all(
-      note.sharedWith.map((user) => this.clearUserCache(user.id)),
+      formattedNote.sharedWith.map((user) => this.clearUserCache(user.id)),
     );
 
-    await this.notesRepository.remove(note);
+    // Fetch the actual entity from the repository
+    const noteEntity = await this.notesRepository.findOne({
+      where: { id },
+      relations: ['owner', 'sharedWith'],
+    });
+
+    if (!noteEntity) {
+      throw new NotFoundException(`Note with ID ${id} not found`);
+    }
+
+    // Remove using the proper entity type
+    await this.notesRepository.remove(noteEntity);
     return { success: true };
   }
 
-  async share(noteId: number, ownerId: number, targetUserId: number) {
+  async share(
+    noteId: number,
+    ownerId: number,
+    targetUserId: number,
+  ): Promise<FormattedNote> {
     this.logger.log(
       `Sharing note ${noteId} from user ${ownerId} to user ${targetUserId}`,
     );
@@ -265,6 +300,15 @@ export class NotesService {
       throw new ForbiddenException('Only the owner can share the note');
     }
 
+    const existingNote = await this.notesRepository.findOne({
+      where: { id: noteId },
+      relations: ['owner', 'sharedWith'],
+    });
+
+    if (!existingNote) {
+      throw new NotFoundException('Note not found');
+    }
+
     const targetUser = await this.usersRepository.findOne({
       where: { id: targetUserId },
     });
@@ -272,13 +316,13 @@ export class NotesService {
       throw new NotFoundException('Target user not found');
     }
 
-    note.sharedWith = [...note.sharedWith, targetUser];
-    const updatedNote = await this.notesRepository.save(note);
+    existingNote.sharedWith = [...existingNote.sharedWith, targetUser];
+    const updatedNote = await this.notesRepository.save(existingNote);
 
     // Clear related caches
     await this.cacheManager.del(this.getCacheKey('single', noteId));
     await this.clearUserCache(targetUserId);
 
-    return updatedNote;
+    return this.formatNote(updatedNote);
   }
 }
